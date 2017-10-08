@@ -1,0 +1,203 @@
+#!/usr/bin/python
+
+import syntax as s
+import sys
+
+class EvalError(Exception):
+	pass
+
+class DesugarError(Exception):
+	pass
+
+
+def isReserved(x):
+	if type(x) != str:
+		raise DesugarError('must be string')
+	reserved = ['lambda', '0', 'succ', 'pred', 'iszero', 'if', 'let', 'fix', 'closure']
+	return (x in reserved)
+
+def FV(e):
+	if type(e) == str:
+		if e == '0' or e == '#t' or e == '#f':
+			return set()
+		else:
+			return set(e)
+	else:
+		if e[0] == 'lambda':
+			return FV(e[2]) - set(e[1][0])
+		elif e[0] == 'if':
+			return FV(e[1]).union(FV(e[2])).union(FV(e[3]))
+		elif e[0] == 'succ' or e[0] == 'pred' or e[0] == 'iszero':
+			return FV(e[1])
+		elif len(e) == 2:
+			return FV(e[0]).union(FV(e[1]))
+		else: 
+			raise EvalError('invalid expression')
+
+def desugar(e):
+	if e == []:
+		return e
+
+	elif type(e) == list:
+		if e[0] == 'let':
+			if len(e) == 3:
+				if type(e[1]) == list and type(e[1][0]) == list and len(e[1][0]) == 2 and not isReserved(e[1][0][0]):
+					return [['lambda', [e[1][0][0]], desugar(e[2])], desugar(e[1][0][1])]
+				else: 
+					raise DesugarError('invalid arguments for let')
+			else:
+				raise DesugarError('let takes 2 arguments')
+
+		elif e[0] == 'fix':
+			if len(e) == 2:
+				t = e[1]
+				return [['lambda', ['f'], [['lambda', ['x'], ['f', ['lambda', ['v'], [['x', 'x'], 'v']]]], ['lambda', ['x'], ['f', ['lambda', ['v'], [['x', 'x'], 'v']]]]]], desugar(t)]
+			else:
+				raise DesugarError('fix takes a single argument')
+
+		elif e[0] == 'lambda':
+			if len(e) == 3:
+				if type(e[1]) == list and len(e[1]) == 1 and not isReserved(e[1][0]):
+					return ['lambda', [e[1][0]], desugar(e[2])]
+				else:
+					raise DesugarError('invalid argument for lambda')
+			else:
+				raise DesugarError('lambda takes 2 arguments')
+
+		elif e[0] == 'succ':
+			if len(e) == 2:
+				return ['succ', desugar(e[1])]
+			else:
+				raise DesugarError('succ takes a single argument')
+
+		elif e[0] == 'if':
+			if len(e) == 4:
+				return ['if', desugar(e[1]), desugar(e[2]), desugar(e[3])]
+			else:
+				raise DesugarError('if takes 3 arguments')
+
+		elif e[0] == 'pred':
+			if len(e) == 2:
+				return ['pred', desugar(e[1])]
+			else:
+				raise DesugarError('pred takes 2 arguments')
+
+		elif e[0] == 'iszero':
+			if len(e) == 2:
+				return ['iszero', desugar(e[1])]
+
+		elif len(e) == 2:
+				return [desugar(e[0]), desugar(e[1])]
+		
+		else:
+				raise DesugarError('invalid expression')
+
+
+	elif not isReserved(e) or e == '0':
+		return e
+
+	else:
+		raise DesugarError('atom must not be reserved word')
+
+
+
+def eval(e):
+
+	def sub(x, v, t):
+		if type(t) == str:
+			if t == x:
+				return v
+			else:
+				return t
+		else:
+			if t[0] == 'lambda':
+				if t[1][0] == x:
+					return t
+				else: 
+					return ['lambda', t[1], sub(x, v, t[2])]
+			elif t[0] == 'if':
+				return ['if', sub(x, v, t[1]), sub(x, v, t[2]), sub(x, v, t[3])]
+
+			elif t[0] == 'succ':
+				return ['succ', sub(x, v, t[1])]
+
+			elif t[0] == 'pred':
+				return ['pred', sub(x, v, t[1])]
+
+			elif t[0] == 'iszero':
+				return ['iszero', sub(x, v, t[1])]
+			
+			elif len(t) == 2:
+				return [sub(x, v, t[0]), sub(x, v, t[1])]
+
+			else:
+				raise EvalError('invalid expression')
+
+
+	if e == []:
+		return e
+	elif e == '0' or e == '#t' or e == '#f':
+		return e
+	elif type(e) == list:
+		if e[0] == 'succ':
+			temp = eval(e[1])
+			if temp == '0' or (len(temp) > 0 and (temp[0] == 'succ' or temp[0] == 'pred')):
+				return ['succ', temp]
+			else:
+				raise EvalError('invalid argument for succ')
+
+		elif e[0] == 'pred':
+			temp = eval(e[1])
+			if temp == '0':
+				return '0'
+			elif len(temp) > 0 and temp[0] == 'succ':
+				return temp[1]
+			else:
+				raise EvalError('invalid argument for pred')
+
+		elif e[0] == 'iszero':
+			temp = eval(e[1])
+			if temp == '0':
+				return '#t'
+			elif len(temp) > 0 and temp[0] == 'succ':
+				return '#f'
+			else:
+				raise EvalError('invalid argument for iszero')
+
+		elif e[0] == 'if':
+			t1 = eval(e[1])
+			if t1 == '#t':
+				return eval(e[2])
+			elif t1 == '#f':
+				return eval(e[3])
+			else:
+				raise EvalError('invalid parameter for if')
+		
+		elif e[0] == 'lambda':
+			return e
+
+		elif len(e) == 2:
+			t1 = eval(e[0])
+			if t1[0] == 'lambda':
+				return eval(sub(t1[1][0], eval(e[1]), t1[2]))
+			else:
+				raise EvalError('cannot apply a non-function')
+		else:
+			raise EvalError('invalid expression')
+
+
+
+	else:
+		raise EvalError("atoms must be #t, #f, or 0")
+
+
+
+
+for line in s.readlines(sys.stdin, "untyped> "):
+	try:
+		expr = desugar(s.parse_expr(line))
+		if len(FV(expr)) != 0:
+			raise EvalError('unbounded variable')
+		print(s.format_expr(eval(expr)))
+	except (s.ParseError, EvalError, DesugarError) as e:
+		print("error: {}".format(e))
